@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LLM Leaderboard Dashboard</title>
+
+  <!-- Chart.js (kept as CDN for simplicity) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js" defer></script>
+
+  <style>
+    /* Design tokens: makes theme changes / reuse easier */
+    :root{
+      --bg-0: #0f1419;
+      --bg-1: #1a1f2e;
+      --card-bg: rgba(255,255,255,0.04);
+      --muted: rgba(255,255,255,0.75);
+      --accent-1: #3b82f6;
+      --accent-2: #60a5fa;
+      --success: #10b981;
+      --danger: #ef4444;
+      --glass-border: rgba(255,255,255,0.08);
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0,0,0,0.35);
+      --max-width: 1400px;
+      --gap: 20px;
+      --transition: 0.25s ease;
+      --font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    /* Light theme overrides (toggled via .light on <body>) */
+    body.light {
+      --bg-0: #f6fbff;
+      --bg-1: #eef4ff;
+      --card-bg: rgba(10,25,47,0.04);
+      --muted: rgba(10,10,10,0.8);
+      --glass-border: rgba(10,10,10,0.06);
+      --shadow: 0 6px 20px rgba(10,10,10,0.06);
+    }
+
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%}
+    body{
+      font-family:var(--font-family);
+      background:linear-gradient(135deg,var(--bg-0) 0%,var(--bg-1) 100%);
+      color:var(--muted);
+      min-height:100vh;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    .dashboard{
+      max-width:var(--max-width);
+      margin:24px auto;
+      padding:20px;
+      gap:var(--gap);
+    }
+
+    /* Header */
+    .header{
+      padding:22px;
+      border-radius:var(--radius);
+      background:linear-gradient(135deg,#1e3a8a 0%,var(--accent-1) 100%);
+      box-shadow:var(--shadow);
+      color: #fff;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+
+    .header-left{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+
+    .header h1{
+      font-size:1.6rem;
+      letter-spacing:0.2px;
+      margin:0;
+      background:linear-gradient(45deg,var(--accent-2),#a78bfa);
+      -webkit-background-clip:text;
+      -webkit-text-fill-color:transparent;
+    }
+
+    .header p{opacity:0.95;font-size:0.95rem}
+
+    .controls-inline{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+
+    .btn{
+      appearance:none;
+      border:1px solid var(--glass-border);
+      background:var(--card-bg);
+      color:var(--muted);
+      padding:8px 12px;
+      border-radius:8px;
+      cursor:pointer;
+      transition:all var(--transition);
+    }
+    .btn:focus{outline:2px solid rgba(59,130,246,0.25);outline-offset:2px}
+    .btn.primary{background:var(--accent-1);border-color:var(--accent-1);color:white}
+    .btn.ghost{background:transparent}
+    .search-box{
+      min-width:200px;
+      padding:8px 12px;
+      border-radius:8px;
+      border:1px solid var(--glass-border);
+      background:transparent;
+      color:var(--muted);
+    }
+
+    /* Stats grid */
+    .stats-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+      gap:var(--gap);
+      margin-top:16px;
+    }
+
+    .stat-card{
+      background:var(--card-bg);
+      padding:16px;
+      border-radius:12px;
+      border:1px solid var(--glass-border);
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      align-items:flex-start;
+      transition:transform var(--transition), box-shadow var(--transition);
+    }
+    .stat-card:hover{transform:translateY(-6px);box-shadow:var(--shadow)}
+    .stat-value{font-size:1.4rem;font-weight:700;color:var(--accent-2)}
+    .stat-label{text-transform:uppercase;font-size:0.75rem;opacity:0.85}
+
+    /* Leaderboard & charts */
+    .leaderboard-wrap{
+      display:grid;
+      grid-template-columns: 2fr 1fr;
+      gap:24px;
+      margin-top:22px;
+    }
+
+    .card{
+      background:var(--card-bg);
+      border-radius:var(--radius);
+      padding:12px;
+      border:1px solid var(--glass-border);
+      box-shadow:var(--shadow);
+    }
+
+    .table-header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      padding:10px 4px;
+      font-weight:600;
+    }
+
+    /* Make filter buttons keyboard friendly and semantic */
+    .filters{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+
+    .filters button.active{background:var(--accent-1);color:white;border-color:var(--accent-1)}
+
+    .table-content{
+      max-height:520px;
+      overflow:auto;
+      margin-top:6px;
+    }
+
+    /* Each model row is keyboard focusable */
+    .model-row{
+      display:grid;
+      grid-template-columns: 60px 1fr 96px 84px 96px 84px;
+      gap:12px;
+      align-items:center;
+      padding:12px;
+      border-bottom:1px solid rgba(255,255,255,0.03);
+      transition:background var(--transition), transform var(--transition);
+    }
+    .model-row:focus, .model-row:hover{background:rgba(255,255,255,0.02);transform:translateY(-2px)}
+    .model-row[role="listitem"]{outline:none}
+    .rank{font-weight:700;color:var(--accent-2)}
+    .rank.top-3{background:linear-gradient(45deg,#fbbf24,#f59e0b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .model-info{display:flex;align-items:center;gap:12px}
+    .model-avatar{
+      width:44px;height:44px;border-radius:8px;display:inline-grid;place-items:center;font-weight:700;color:white;
+      background:linear-gradient(45deg,#8b5cf6,#a78bfa);
+      flex-shrink:0;
+    }
+    .model-details h3{margin:0;font-size:1rem}
+    .model-details p{margin:0;font-size:0.85rem;opacity:0.75}
+
+    .elo-score{font-weight:700;color:var(--success)}
+    .win-rate{font-weight:600}
+    .battles{opacity:0.85}
+
+    .trend-up{color:var(--success)}
+    .trend-down{color:var(--danger)}
+
+    /* Charts area */
+    .charts-section{height:100%}
+    .chart-container{height:300px}
+
+    /* Metrics grid */
+    .metrics-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+      gap:16px;
+      margin-top:18px;
+    }
+
+    /* Responsive */
+    @media (max-width:900px){
+      .leaderboard-wrap{grid-template-columns:1fr}
+      .model-row{grid-template-columns:48px 1fr 80px 68px}
+    }
+
+    /* Loading skeleton */
+    .skeleton{background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.06), rgba(255,255,255,0.02));border-radius:6px}
+    .skeleton.text{height:14px;width:100%}
+    .skeleton.avatar{width:44px;height:44px;border-radius:8px}
+
+    /* refresh indicator */
+    .refresh-indicator{
+      position:fixed;right:20px;top:20px;padding:8px 14px;border-radius:999px;background:var(--success);color:white;font-weight:600;opacity:0;transition:opacity .2s;
+      box-shadow:0 6px 18px rgba(0,0,0,0.18)
+    }
+    .refresh-indicator.show{opacity:1}
+  </style>
+</head>
+<body>
+  <div class="dashboard" id="dashboard" role="application" aria-labelledby="dashboardTitle">
+    <div class="refresh-indicator" id="refreshIndicator" role="status" aria-live="polite">Updated • Just now</div>
+
+    <header class="header" aria-hidden="false">
+      <div class="header-left">
+        <h1 id="dashboardTitle">LLM Leaderboard</h1>
+        <p id="dashboardSubtitle">Real-time rankings powered by Elo ratings — accessible, responsive, and embeddable</p>
+      </div>
+
+      <div class="controls-inline">
+        <button class="btn ghost" id="themeToggle" title="Toggle theme" aria-pressed="false">🌗 Theme</button>
+        <input id="searchBox" class="search-box" type="search" placeholder="Search model or org…" aria-label="Search models" />
+        <button class="btn primary" id="manualRefresh">🔄 Refresh</button>
+      </div>
+    </header>
+
+    <section class="stats-grid" aria-label="Overview statistics">
+      <div class="stat-card" aria-hidden="false">
+        <div class="stat-value" id="totalModels">—</div>
+        <div class="stat-label">Total Models</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="totalBattles">—</div>
+        <div class="stat-label">Total Battles</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="avgElo">—</div>
+        <div class="stat-label">Average Elo</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="lastUpdate">—</div>
+        <div class="stat-label">Last Update</div>
+      </div>
+    </section>
+
+    <section class="leaderboard-wrap" aria-label="Leaderboard and charts">
+      <div class="card" aria-labelledby="rankingsTitle">
+        <div class="table-header">
+          <div style="display:flex;gap:8px;align-items:center">
+            <strong id="rankingsTitle">🏆 Model Rankings</strong>
+            <small style="opacity:.8">Sorted by Elo</small>
+          </div>
+
+          <div class="filters" role="tablist" aria-label="Model filters">
+            <!-- buttons will be generated to be semantic -->
+            <button class="btn active" data-filter="all" role="tab" aria-selected="true">All</button>
+            <button class="btn" data-filter="open" role="tab" aria-selected="false">Open Source</button>
+            <button class="btn" data-filter="commercial" role="tab" aria-selected="false">Commercial</button>
+            <button class="btn" data-filter="multimodal" role="tab" aria-selected="false">Multimodal</button>
+          </div>
+        </div>
+
+        <div class="table-content" id="leaderboardContent" role="list" aria-live="polite">
+          <!-- rows injected by JS -->
+          <!-- while loading, show skeletons -->
+        </div>
+      </div>
+
+      <aside class="card charts-section" aria-label="Charts">
+        <h3 style="margin:6px 0 12px;color:var(--accent-2)">Elo Distribution</h3>
+        <div class="chart-container">
+          <canvas id="eloChart" aria-label="Elo distribution chart" role="img"></canvas>
+        </div>
+
+        <div style="margin-top:8px;">
+          <small style="opacity:0.8">Tip: click "Refresh" to fetch live data. Data is cached for 5 minutes.</small>
+        </div>
+      </aside>
+    </section>
+
+    <section class="metrics-grid" aria-label="Additional metrics">
+      <div class="card">
+        <div style="font-weight:600;color:var(--accent-2);margin-bottom:8px">Performance by Category</div>
+        <div id="categoryMetrics"></div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:600;color:var(--accent-2);margin-bottom:8px">Recent Battles</div>
+        <div id="recentBattles"></div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:600;color:var(--accent-2);margin-bottom:8px">Model Statistics</div>
+        <div id="modelStats"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Utilities
+    const nf = new Intl.NumberFormat();
+    const timeAgo = (ts) => {
+      const diff = Math.floor((Date.now() - ts)/1000);
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+      return `${Math.floor(diff/86400)}d ago`;
+    };
+
+    // Small color generator for avatars (based on name)
+    function avatarColor(name){
+      const colors = [
+        'linear-gradient(45deg,#8b5cf6,#a78bfa)',
+        'linear-gradient(45deg,#fb7185,#f97316)',
+        'linear-gradient(45deg,#06b6d4,#3b82f6)',
+        'linear-gradient(45deg,#10b981,#34d399)',
+        'linear-gradient(45deg,#f59e0b,#fbbf24)'
+      ];
+      let sum = 0;
+      for (let i=0;i<name.length;i++) sum += name.charCodeAt(i);
+      return colors[sum % colors.length];
+    }
+
+    // Improved DataManager
+    class DataManager {
+      constructor(){
+        this.cache = null;
+        this.cacheTs = 0;
+        this.cacheTimeout = 5*60*1000; // 5 minutes
+        this.fallbackData = this.getFallbackData();
+        this.hfEndpoint = 'https://datasets-server.huggingface.co/rows?dataset=open-llm-leaderboard/results&config=default&split=train&offset=0&length=50';
+      }
+
+      // fetch with timeout
+      async fetchWithTimeout(url, timeout = 7000){
+        const controller = new AbortController();
+        const id = setTimeout(()=>controller.abort(), timeout);
+        try {
+          const res = await fetch(url, {signal: controller.signal});
+          clearTimeout(id);
+          if (!res.ok) throw new Error('HTTP '+res.status);
+          return await res.json();
+        } finally {
+          clearTimeout(id);
+        }
+      }
+
+      isCacheValid(){
+        return this.cache && (Date.now() - this.cacheTs) < this.cacheTimeout;
+      }
+
+      getFallbackData(){
+        // minimal fallback (kept small)
+        return [
+          {name:"GPT-4",organization:"OpenAI",elo:1324,winRate:68.5,battles:8247,trend:"up",trendValue:12,category:"commercial",multimodal:true},
+          {name:"Claude-3 Opus",organization:"Anthropic",elo:1298,winRate:65.2,battles:7891,trend:"up",trendValue:8,category:"commercial",multimodal:true},
+          {name:"Gemini Pro",organization:"Google",elo:1276,winRate:62.1,battles:6543,trend:"down",trendValue:-3,category:"commercial",multimodal:true}
+        ];
+      }
+
+      // Transform Hugging Face rows to our model shape
+      transformHFData(rows){
+        if (!rows || !Array.isArray(rows)) return [];
+        return rows.map(row => {
+          const model = row.row || row;
+          const fullname = model.model || '';
+          const name = fullname.split('/').pop() || fullname;
+          const org = fullname.split('/')[0] || 'Unknown';
+          // Use numeric fields carefully - many datasets use different property names.
+          const avg = model.average || model.avg || model.accuracy || 0;
+          const elo = Math.round(1000 + (avg * 4)); // rough conversion as before
+          const winRate = Math.round((avg*100) * 10)/10 || 0;
+          const battles = model.num_params || model.battles || Math.floor((avg||0)*1000);
+          return {
+            name,
+            organization: org,
+            elo,
+            winRate,
+            battles,
+            trend: Math.random()>0.5 ? 'up' : 'down',
+            trendValue: Math.floor(Math.random()*10),
+            category: 'open',
+            multimodal: this.isMultimodal(fullname),
+            raw: model
+          };
+        });
+      }
+
+      isMultimodal(name=''){
+        const keywords = ['vision','multimodal','llava','blip','clip','image'];
+        return keywords.some(k => name.toLowerCase().includes(k));
+      }
+
+      async getData(force=false){
+        if (!force && this.isCacheValid()) return this.cache;
+
+        // Try HF, fallback to local fallbackData
+        try {
+          const json = await this.fetchWithTimeout(this.hfEndpoint, 7000);
+          const rows = json?.rows || json;
+          const hf = this.transformHFData(rows);
+          // Keep a mix of commercial + HF open-source
+          const final = [
+            ...this.fallbackData,
+            ...hf.slice(0, 20)
+          ].sort((a,b)=>b.elo - a.elo);
+          this.cache = final;
+          this.cacheTs = Date.now();
+          return final;
+        } catch (e) {
+          console.warn('HF fetch failed, using fallback', e);
+          // cache fallback too to avoid frequent failed calls
+          this.cache = this.fallbackData;
+          this.cacheTs = Date.now();
+          return this.cache;
+        }
+      }
+
+      async refresh(){
+        // bypass cache
+        this.cache = null;
+        return await this.getData(true);
+      }
+    }
+
+    // App state
+    const dataManager = new DataManager();
+    let models = [];
+    let filtered = [];
+    let currentFilter = 'all';
+
+    // DOM helpers
+    const $ = id => document.getElementById(id);
+
+    // Renderers
+    function renderSkeletons(count = 6){
+      const el = $('leaderboardContent');
+      el.innerHTML = '';
+      for (let i=0;i<count;i++){
+        const row = document.createElement('div');
+        row.className = 'model-row';
+        row.innerHTML = `
+          <div class="skeleton avatar"></div>
+          <div style="flex:1">
+            <div class="skeleton text" style="width:60%"></div>
+            <div style="height:8px"></div>
+            <div class="skeleton text" style="width:40%"></div>
+          </div>
+          <div class="skeleton text" style="width:80px"></div>
+          <div class="skeleton text" style="width:60px"></div>
+          <div class="skeleton text" style="width:80px"></div>
+          <div class="skeleton text" style="width:60px"></div>
+        `;
+        el.appendChild(row);
+      }
+    }
+
+    function renderLeaderboard(){
+      const container = $('leaderboardContent');
+      container.innerHTML = '';
+      if (!filtered.length){
+        container.innerHTML = `<div style="padding:16px;opacity:.85">No models found.</div>`;
+        return;
+      }
+
+      filtered.forEach((m, idx) => {
+        const row = document.createElement('div');
+        row.className = 'model-row';
+        row.setAttribute('role','listitem');
+        row.setAttribute('tabindex','0');
+
+        const rankClass = idx < 3 ? 'rank top-3' : 'rank';
+        const trendIcon = m.trend === 'up' ? '↗' : '↘';
+        const trendClass = m.trend === 'up' ? 'trend-up' : 'trend-down';
+
+        const avatar = (m.name || '??').substring(0,2).toUpperCase();
+        const avatarStyle = `background:${avatarColor(m.name||'')}`;
+
+        row.innerHTML = `
+          <div class="${rankClass}">#${idx+1}</div>
+          <div class="model-info" title="${m.name}">
+            <div class="model-avatar" style="${avatarStyle}">${avatar}</div>
+            <div class="model-details">
+              <h3>${escapeHtml(m.name)}</h3>
+              <p>${escapeHtml(m.organization || '')}</p>
+            </div>
+          </div>
+          <div class="elo-score">${nf.format(m.elo)}</div>
+          <div class="win-rate">${m.winRate}%</div>
+          <div class="battles">${nf.format(m.battles || 0)}</div>
+          <div class="trend ${trendClass}">${trendIcon} ${Math.abs(m.trendValue || 0)}</div>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    // small escaping helper for safety when injecting text
+    function escapeHtml(s=''){
+      return String(s)
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;');
+    }
+
+    function updateStats(){
+      $('totalModels').textContent = filtered.length;
+      const totalBattles = filtered.reduce((acc,m)=>acc + (Number(m.battles) || 0), 0);
+      $('totalBattles').textContent = nf.format(totalBattles);
+      const avgElo = filtered.length ? Math.round(filtered.reduce((acc,m)=>acc + (Number(m.elo)||0),0)/filtered.length) : 0;
+      $('avgElo').textContent = nf.format(avgElo);
+      $('lastUpdate').textContent = timeAgo(dataManager.cacheTs || Date.now());
+    }
+
+    function renderCategories(){
+      const container = $('categoryMetrics');
+      container.innerHTML = '';
+      const categories = [
+        {name:'Reasoning',score:87},
+        {name:'Coding',score:82},
+        {name:'Math',score:75},
+        {name:'Writing',score:91},
+        {name:'Analysis',score:78}
+      ];
+      categories.forEach(c => {
+        const item = document.createElement('div');
+        item.style.marginBottom = '8px';
+        item.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span>${c.name}</span><strong>${c.score}%</strong>
+          </div>
+          <div style="height:8px;background:rgba(255,255,255,0.06);border-radius:6px;overflow:hidden">
+            <div style="width:${c.score}%;height:100%;background:linear-gradient(90deg,var(--accent-1),var(--accent-2))"></div>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function renderRecentBattles(){
+      const container = $('recentBattles');
+      container.innerHTML = '';
+      const battles = [
+        {winner:'GPT-4',loser:'Claude-3',time:'2m ago'},
+        {winner:'Gemini Pro',loser:'LLaMA-2',time:'5m ago'},
+        {winner:'Claude-3',loser:'Mixtral',time:'8m ago'},
+        {winner:'GPT-4',loser:'PaLM 2',time:'12m ago'}
+      ];
+      battles.forEach(b => {
+        const item = document.createElement('div');
+        item.style.padding='8px 0';
+        item.style.borderBottom='1px solid rgba(255,255,255,0.03)';
+        item.innerHTML = `<strong>${b.winner}</strong> vs ${b.loser} <br><small style="opacity:.7">${b.time}</small>`;
+        container.appendChild(item);
+      });
+    }
+
+    function renderModelStats(){
+      const container = $('modelStats');
+      container.innerHTML = '';
+      const stats = [
+        {label:'Open Source Models',value:'42%'},
+        {label:'Multimodal Capable',value:'58%'},
+        {label:'Average Battles/Model',value:'6.8K'},
+        {label:'New This Month',value:'3'}
+      ];
+      stats.forEach(s=>{
+        const item = document.createElement('div');
+        item.style.padding='8px 0'; item.style.display='flex'; item.style.justifyContent='space-between';
+        item.style.borderBottom='1px solid rgba(255,255,255,0.03)';
+        item.innerHTML = `<span>${s.label}</span><strong>${s.value}</strong>`;
+        container.appendChild(item);
+      });
+    }
+
+    // Chart
+    let eloChart = null;
+    function initChart(){
+      const ctx = document.getElementById('eloChart').getContext('2d');
+      const labels = ['<1200','1200-1299','1300-1399','1400+'];
+      const data = [0,0,0,0];
+      eloChart = new Chart(ctx, {
+        type:'bar',
+        data:{labels,datasets:[{label:'Models',data,backgroundColor:'rgba(59,130,246,0.7)'}]},
+        options:{
+          responsive:true,
+          maintainAspectRatio:false,
+          plugins:{legend:{display:false}},
+          scales:{
+            x:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted')}},
+            y:{beginAtZero:true,ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted')}}
+          }
+        }
+      });
+      updateChart();
+    }
+
+    function updateChart(){
+      if (!eloChart) return;
+      const bins = [0,0,0,0];
+      models.forEach(m=>{
+        const e = Number(m.elo) || 0;
+        if (e < 1200) bins[0]++;
+        else if (e < 1300) bins[1]++;
+        else if (e < 1400) bins[2]++;
+        else bins[3]++;
+      });
+      eloChart.data.datasets[0].data = bins;
+      eloChart.update();
+    }
+
+    // Filtering, searching
+    function applyFilter(filter){
+      currentFilter = filter || 'all';
+      if (filter === 'all') filtered = [...models];
+      else if (filter === 'multimodal') filtered = models.filter(m => m.multimodal);
+      else filtered = models.filter(m => m.category === filter);
+      filtered.sort((a,b)=>b.elo - a.elo);
+      renderLeaderboard();
+      updateStats();
+    }
+
+    function searchQuery(q){
+      const ql = q.trim().toLowerCase();
+      if (!ql) { applyFilter(currentFilter); return; }
+      filtered = models.filter(m => (m.name||'').toLowerCase().includes(ql) || (m.organization||'').toLowerCase().includes(ql));
+      filtered.sort((a,b)=>b.elo - a.elo);
+      renderLeaderboard(); updateStats();
+    }
+
+    // Show/hide refresh indicator
+    function showIndicator(text='Updated • Just now'){
+      const el = $('refreshIndicator');
+      el.textContent = text;
+      el.classList.add('show');
+      setTimeout(()=>el.classList.remove('show'),2000);
+    }
+
+    // Flow: initialize dashboard (with skeletons), get data, render
+    async function initializeDashboard(){
+      renderSkeletons(6);
+      renderCategories();
+      renderRecentBattles();
+      renderModelStats();
+      initChart();
+
+      try {
+        models = await dataManager.getData();
+      } catch(e){
+        console.warn('Error getting data', e);
+        models = dataManager.fallbackData;
+      }
+      filtered = [...models];
+      applyFilter('all');
+      updateChart();
+      showIndicator('Loaded • Just now');
+    }
+
+    async function refreshData(){
+      // show immediate UI feedback
+      renderSkeletons(3);
+      try {
+        models = await dataManager.refresh();
+        applyFilter(currentFilter);
+        updateChart();
+        showIndicator('Refreshed • Just now');
+      } catch (e){
+        console.error('Refresh failed', e);
+        showIndicator('Refresh failed');
+      }
+    }
+
+    // Theme handling (persisted)
+    const body = document.body;
+    function setTheme(isLight){
+      if (isLight) body.classList.add('light');
+      else body.classList.remove('light');
+      localStorage.setItem('llm_theme', isLight ? 'light' : 'dark');
+      $('themeToggle').setAttribute('aria-pressed', String(isLight));
+    }
+    document.getElementById('themeToggle').addEventListener('click', ()=>{
+      const isLight = !body.classList.contains('light');
+      setTheme(isLight);
+    });
+    // restore
+    setTheme(localStorage.getItem('llm_theme') === 'light');
+
+    // Event wiring
+    // Filter buttons (delegation)
+    document.addEventListener('click', (e)=>{
+      const b = e.target.closest('.filters .btn');
+      if (!b) return;
+      const buttons = document.querySelectorAll('.filters .btn');
+      buttons.forEach(x=>{ x.classList.remove('active'); x.setAttribute('aria-selected','false') });
+      b.classList.add('active');
+      b.setAttribute('aria-selected','true');
+      applyFilter(b.dataset.filter);
+    });
+
+    $('searchBox').addEventListener('input', (e)=>searchQuery(e.target.value));
+    $('manualRefresh').addEventListener('click', refreshData);
+
+    // keyboard + accessibility: allow Enter on leaderboard rows to focus details (placeholder)
+    document.getElementById('leaderboardContent').addEventListener('keydown', (e)=>{
+      const row = e.target.closest('.model-row');
+      if (!row) return;
+      if (e.key === 'Enter') {
+        // placeholder: you could open a modal or navigate to details
+        const name = row.querySelector('.model-details h3')?.textContent;
+        alert(`Open details for ${name}`);
+      }
+    });
+
+    // Initialize app
+    document.addEventListener('DOMContentLoaded', initializeDashboard);
+    // Auto-refresh every 10 minutes
+    setInterval(() => dataManager.getData().then(()=>{}), 10*60*1000);
+  </script>
+</body>
+</html>
